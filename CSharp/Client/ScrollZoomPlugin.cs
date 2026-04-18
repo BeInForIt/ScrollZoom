@@ -1,6 +1,8 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Text;
 using Barotrauma;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
@@ -37,6 +39,7 @@ namespace ScrollZoom
             {
                 FileLogger.Log($"{HarmonyId}: Initialize start");
                 LuaCsLogger.Log($"{HarmonyId}: Initialize start");
+                ScrollZoomConfig.Load();
                 HarmonyInstance = new Harmony(HarmonyId);
                 HarmonyInstance.PatchAll(Assembly.GetExecutingAssembly());
                 FileLogger.Log($"{HarmonyId}: Initialize completed");
@@ -74,18 +77,169 @@ namespace ScrollZoom
         }
     }
 
+    internal static class ScrollZoomConfig
+    {
+        private const string ConfigFileName = "scrollzoom_config.txt";
+        private const float DefaultMaxZoomOut = 0.20f;
+        private const float DefaultMaxZoomIn = 2.25f;
+        private const float DefaultZoomStepPerNotch = 0.06f;
+        private const float DefaultFreecamChaseSpeed = 10.0f;
+        private const float MinAllowedZoom = 0.05f;
+        private const float MaxAllowedZoom = 8.0f;
+
+        public static float MaxZoomOut = DefaultMaxZoomOut;
+        public static float MaxZoomIn = DefaultMaxZoomIn;
+        public static float ZoomStepPerNotch = DefaultZoomStepPerNotch;
+        public static float FreecamChaseSpeed = DefaultFreecamChaseSpeed;
+
+        public static void Load()
+        {
+            ResetDefaults();
+
+            try
+            {
+                string configPath = ResolveConfigPath();
+                EnsureConfigExists(configPath);
+                ParseConfig(configPath);
+                Clamp();
+                FileLogger.Log(
+                    $"CONFIG_LOADED path={configPath} maxZoomOut={MaxZoomOut} maxZoomIn={MaxZoomIn} zoomStep={ZoomStepPerNotch} freecamChaseSpeed={FreecamChaseSpeed}");
+            }
+            catch (Exception ex)
+            {
+                ResetDefaults();
+                Clamp();
+                FileLogger.Log($"CONFIG_LOAD_FAILED exception={ex}");
+            }
+        }
+
+        private static void ResetDefaults()
+        {
+            MaxZoomOut = DefaultMaxZoomOut;
+            MaxZoomIn = DefaultMaxZoomIn;
+            ZoomStepPerNotch = DefaultZoomStepPerNotch;
+            FreecamChaseSpeed = DefaultFreecamChaseSpeed;
+        }
+
+        private static void Clamp()
+        {
+            MaxZoomOut = MathHelper.Clamp(MaxZoomOut, MinAllowedZoom, MaxAllowedZoom - 0.05f);
+            MaxZoomIn = MathHelper.Clamp(MaxZoomIn, MaxZoomOut + 0.05f, MaxAllowedZoom);
+            ZoomStepPerNotch = MathHelper.Clamp(ZoomStepPerNotch, 0.01f, 1.0f);
+            FreecamChaseSpeed = MathHelper.Clamp(FreecamChaseSpeed, 0.1f, 60.0f);
+        }
+
+        private static void ParseConfig(string configPath)
+        {
+            foreach (string rawLine in File.ReadAllLines(configPath))
+            {
+                string line = rawLine.Trim();
+                if (string.IsNullOrEmpty(line) || line.StartsWith("#") || line.StartsWith("//"))
+                {
+                    continue;
+                }
+
+                int separatorIndex = line.IndexOf('=');
+                if (separatorIndex <= 0 || separatorIndex >= line.Length - 1)
+                {
+                    continue;
+                }
+
+                string key = line.Substring(0, separatorIndex).Trim();
+                string valueText = line.Substring(separatorIndex + 1).Trim();
+                if (!float.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
+                {
+                    FileLogger.Log($"CONFIG_INVALID_VALUE key={key} value={valueText}");
+                    continue;
+                }
+
+                switch (key.ToLowerInvariant())
+                {
+                    case "maxzoomout":
+                        MaxZoomOut = value;
+                        break;
+                    case "maxzoomin":
+                        MaxZoomIn = value;
+                        break;
+                    case "zoomsteppernotch":
+                        ZoomStepPerNotch = value;
+                        break;
+                    case "freecamchasespeed":
+                        FreecamChaseSpeed = value;
+                        break;
+                }
+            }
+        }
+
+        private static void EnsureConfigExists(string configPath)
+        {
+            if (File.Exists(configPath))
+            {
+                return;
+            }
+
+            string directory = Path.GetDirectoryName(configPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            File.WriteAllText(configPath, BuildDefaultConfigText());
+        }
+
+        private static string ResolveConfigPath()
+        {
+            string currentDirectory = Environment.CurrentDirectory;
+            string assemblyDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? currentDirectory;
+            string[] candidateDirectories =
+            {
+                Path.Combine(currentDirectory, "LocalMods", "ScrollZoom"),
+                Path.Combine(currentDirectory, "LocalMods", "scrollzoom"),
+                assemblyDirectory,
+                currentDirectory
+            };
+
+            foreach (string directory in candidateDirectories)
+            {
+                if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+                {
+                    return Path.Combine(directory, ConfigFileName);
+                }
+            }
+
+            return Path.Combine(currentDirectory, ConfigFileName);
+        }
+
+        private static string BuildDefaultConfigText()
+        {
+            StringBuilder builder = new StringBuilder();
+            builder.AppendLine("# ScrollZoom config");
+            builder.AppendLine("# MaxZoomOut: lower value = camera can zoom farther away.");
+            builder.AppendLine("# MaxZoomIn: higher value = camera can zoom in closer.");
+            builder.AppendLine("# ZoomStepPerNotch: wheel sensitivity, lower is smoother.");
+            builder.AppendLine("# FreecamChaseSpeed: how fast freecam follows the cursor.");
+            builder.AppendLine("MaxZoomOut=0.20");
+            builder.AppendLine("MaxZoomIn=2.25");
+            builder.AppendLine("ZoomStepPerNotch=0.06");
+            builder.AppendLine("FreecamChaseSpeed=10.0");
+            return builder.ToString();
+        }
+    }
+
     internal static class ScrollZoomState
     {
-        public const float MinZoom = 0.35f;
-        public const float MaxZoom = 2.25f;
-        public const float ZoomStepPerNotch = 0.06f;
-        public const float FreecamChaseSpeed = 10.0f;
+        public static float MinZoom => ScrollZoomConfig.MaxZoomOut;
+        public static float MaxZoom => ScrollZoomConfig.MaxZoomIn;
+        public static float ZoomStepPerNotch => ScrollZoomConfig.ZoomStepPerNotch;
+        public static float FreecamChaseSpeed => ScrollZoomConfig.FreecamChaseSpeed;
 
         public static bool FreecamEnabled;
+        public static bool FreecamPositionFrozen;
         public static bool ScrollZoomEnabled = true;
         public static bool LockToCharacterEnabled;
 
         public static bool ToggleFreecamWasDown;
+        public static bool ToggleFreezeWasDown;
         public static bool ToggleZoomWasDown;
         public static bool ToggleLockWasDown;
 
@@ -96,6 +250,7 @@ namespace ScrollZoom
         public static Vector2 FreecamTarget = Vector2.Zero;
 
         public static int FreecamToggleCounter;
+        public static int FreezeToggleCounter;
         public static int ZoomToggleCounter;
         public static int LockToggleCounter;
         public static int WheelCounter;
@@ -107,10 +262,12 @@ namespace ScrollZoom
         public static void Reset()
         {
             FreecamEnabled = false;
+            FreecamPositionFrozen = false;
             ScrollZoomEnabled = true;
             LockToCharacterEnabled = false;
 
             ToggleFreecamWasDown = false;
+            ToggleFreezeWasDown = false;
             ToggleZoomWasDown = false;
             ToggleLockWasDown = false;
 
@@ -121,6 +278,7 @@ namespace ScrollZoom
             FreecamTarget = Vector2.Zero;
 
             FreecamToggleCounter = 0;
+            FreezeToggleCounter = 0;
             ZoomToggleCounter = 0;
             LockToggleCounter = 0;
             WheelCounter = 0;
@@ -163,10 +321,7 @@ namespace ScrollZoom
                 return;
             }
 
-            Vector2 centerScreen = GetScreenCenter(__instance);
-            Vector2 cursorWorld = __instance.ScreenToWorld(PlayerInput.MousePosition);
-            Vector2 centerWorld = __instance.ScreenToWorld(centerScreen);
-            Vector2 worldDelta = cursorWorld - centerWorld;
+            Vector2 centerWorld = GetCameraCenterWorld(__instance);
 
             if (!ScrollZoomState.HasFreecamTarget)
             {
@@ -175,6 +330,14 @@ namespace ScrollZoom
                 FileLogger.Log($"FREECAM_INIT target={ScrollZoomState.FreecamTarget}");
             }
 
+            if (ScrollZoomState.FreecamPositionFrozen)
+            {
+                __instance.TargetPos = ScrollZoomState.FreecamTarget;
+                return;
+            }
+
+            Vector2 cursorWorld = __instance.ScreenToWorld(PlayerInput.MousePosition);
+            Vector2 worldDelta = cursorWorld - centerWorld;
             float dt = Math.Max(deltaTime, 0.0001f);
             ScrollZoomState.FreecamTarget += worldDelta * ScrollZoomState.FreecamChaseSpeed * dt;
             __instance.TargetPos = ScrollZoomState.FreecamTarget;
@@ -229,6 +392,7 @@ namespace ScrollZoom
             if (freecamDown && !ScrollZoomState.ToggleFreecamWasDown)
             {
                 ScrollZoomState.FreecamEnabled = !ScrollZoomState.FreecamEnabled;
+                ScrollZoomState.FreecamPositionFrozen = false;
                 ScrollZoomState.FreecamToggleCounter++;
 
                 if (ScrollZoomState.FreecamEnabled && __instance != null)
@@ -245,6 +409,23 @@ namespace ScrollZoom
                     $"TOGGLE_FREECAM #{ScrollZoomState.FreecamToggleCounter} enabled={ScrollZoomState.FreecamEnabled} target={ScrollZoomState.FreecamTarget}");
             }
             ScrollZoomState.ToggleFreecamWasDown = freecamDown;
+
+            bool freezeDown = PlayerInput.KeyDown(Keys.NumPad4);
+            if (freezeDown && !ScrollZoomState.ToggleFreezeWasDown && ScrollZoomState.FreecamEnabled)
+            {
+                ScrollZoomState.FreecamPositionFrozen = !ScrollZoomState.FreecamPositionFrozen;
+                ScrollZoomState.FreezeToggleCounter++;
+
+                if (__instance != null)
+                {
+                    ScrollZoomState.FreecamTarget = GetCameraCenterWorld(__instance);
+                    ScrollZoomState.HasFreecamTarget = true;
+                }
+
+                FileLogger.Log(
+                    $"TOGGLE_FREEZE #{ScrollZoomState.FreezeToggleCounter} enabled={ScrollZoomState.FreecamPositionFrozen} target={ScrollZoomState.FreecamTarget}");
+            }
+            ScrollZoomState.ToggleFreezeWasDown = freezeDown;
 
             bool zoomDown = PlayerInput.KeyDown(Keys.NumPad5);
             if (zoomDown && !ScrollZoomState.ToggleZoomWasDown)

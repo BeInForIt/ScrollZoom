@@ -1,0 +1,9 @@
+# ScrollZoom config
+# MaxZoomOut: lower value = camera can zoom farther away.
+# MaxZoomIn: higher value = camera can zoom in closer.
+# ZoomStepPerNotch: wheel sensitivity, lower is smoother.
+# FreecamChaseSpeed: how fast freecam follows the cursor.
+MaxZoomOut=0.10
+MaxZoomIn=2.25
+ZoomStepPerNotch=0.06
+FreecamChaseSpeed=10.0
